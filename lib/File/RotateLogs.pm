@@ -8,8 +8,19 @@ use Proc::Daemon;
 use File::Spec;
 use Mouse;
 use Mouse::Util::TypeConstraints;
+use Time::HiRes qw/ gettimeofday /;
 
-our $VERSION = '0.07';
+our $VERSION = '0.070001';
+
+our @ISA = qw(Exporter);
+
+our @EXPORT = qw (Ldate Ltime Lmicroseconds);
+
+use constant {
+    Ldate           => 1 << 0, # the date: 2009/01/23
+    Ltime           => 1 << 1, # the time: 01:23:23
+    Lmicroseconds   => 1 << 2, # microsecond resolution: 01:23:23.123123.  assumes Ltime.
+};
 
 subtype 'File::RotateLogs::Path'
     => as 'Str'
@@ -24,6 +35,13 @@ coerce 'File::RotateLogs::Path'
     };
 
 no Mouse::Util::TypeConstraints;
+
+has 'flags' => (
+    is => 'ro',
+    isa => 'Int',
+    required => 0,
+    default => 0,
+);
 
 has 'logfile' => (
     is => 'ro',
@@ -66,12 +84,33 @@ has 'offset' => (
     default => 0,
 );
 
+sub _header {
+    my ($self) = @_;
+    my $header = "";
+    if ($self->flags) {
+        my ($epocsec, $microsec) = gettimeofday();
+        my ($sec, $min, $hour, $mday, $mon, $year, $wday, $yday, $isdst) = localtime($epocsec);
+        $year += 1900;
+        $mon += 1;
+        $header .= sprintf("%04d/%02d/%02d", $year,$mon,$mday) if (Ldate & $self->flags);
+        $header .= " " if ($header);
+        $header .= sprintf("%02d:%02d:%02d", $hour,$min,$sec) if (Ltime & $self->flags);
+        $header .= sprintf(".%d", $microsec) if Lmicroseconds & $self->flags;
+        $header .= " " if ($header);
+    }
+    return $header;
+}
 
 sub _gen_filename {
     my $self = shift;
     my $now = time;
     my $time = $now - (($now + $self->offset) % $self->rotationtime);
     return POSIX::strftime($self->logfile, localtime($time));
+}
+
+sub println {
+    my ($self,$log) = @_;
+    $self->print($log . "\n");
 }
 
 sub print {
@@ -101,7 +140,7 @@ sub print {
         }
     }
 
-    $fh->print($log)
+    $fh->print($self->_header . $log)
         or die "Cannot write to $fname: $!";
 
     $self->{fh} = $fh;
