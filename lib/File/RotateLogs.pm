@@ -9,17 +9,20 @@ use File::Spec;
 use Mouse;
 use Mouse::Util::TypeConstraints;
 use Time::HiRes qw/ gettimeofday /;
+use File::Basename;
 
-our $VERSION = '0.070001';
+our $VERSION = '0.070002';
 
 our @ISA = qw(Exporter);
 
-our @EXPORT = qw (Ldate Ltime Lmicroseconds);
+our @EXPORT = qw (Ldate Ltime Lmicroseconds Llongfile Lshortfile);
 
 use constant {
     Ldate           => 1 << 0, # the date: 2009/01/23
     Ltime           => 1 << 1, # the time: 01:23:23
     Lmicroseconds   => 1 << 2, # microsecond resolution: 01:23:23.123123.  assumes Ltime.
+    Llongfile       => 1 << 3, # full file name and line number: /a/b/c/d.pl:23
+    Lshortfile      => 1 << 4, # final file name element and line number: d.pl:23. overrides Llongfile
 };
 
 subtype 'File::RotateLogs::Path'
@@ -37,7 +40,7 @@ coerce 'File::RotateLogs::Path'
 no Mouse::Util::TypeConstraints;
 
 has 'flags' => (
-    is => 'ro',
+    is => 'rw',
     isa => 'Int',
     required => 0,
     default => 0,
@@ -86,18 +89,29 @@ has 'offset' => (
 
 sub _header {
     my ($self) = @_;
-    my $header = "";
-    if ($self->flags) {
-        my ($epocsec, $microsec) = gettimeofday();
-        my ($sec, $min, $hour, $mday, $mon, $year, $wday, $yday, $isdst) = localtime($epocsec);
-        $year += 1900;
-        $mon += 1;
-        $header .= sprintf("%04d/%02d/%02d", $year,$mon,$mday) if (Ldate & $self->flags);
-        $header .= " " if ($header);
-        $header .= sprintf("%02d:%02d:%02d", $hour,$min,$sec) if (Ltime & $self->flags);
-        $header .= sprintf(".%d", $microsec) if Lmicroseconds & $self->flags;
-        $header .= " " if ($header);
+    my $header = '';
+    return $header unless ($self->flags);
+
+    my ($epocsec, $microsec) = gettimeofday();
+    my ($sec, $min, $hour, $mday, $mon, $year, $wday, $yday, $isdst) = localtime($epocsec);
+    $year += 1900;
+    $mon += 1;
+    $header .= sprintf("%04d/%02d/%02d", $year,$mon,$mday) if (Ldate & $self->flags);
+    $header .= " " if ($header);
+    $header .= sprintf("%02d:%02d:%02d", $hour,$min,$sec) if (Ltime & $self->flags);
+    $header .= sprintf(".%d", $microsec) if Lmicroseconds & $self->flags;
+    $header .= " " if ($header);
+
+    if ((Llongfile | Lshortfile) & $self->flags) {
+        my ($package, $filename, $line, $subroutine, $hasargs, $wantarray, $evaltext, $is_require, $hints, $bitmask, $hinthash) = caller(2);
+        if (Llongfile & $self->flags) {
+            $header .= sprintf("%s:%d: ", $filename, $line);
+        } else {
+            $filename = basename($filename);
+            $header .= sprintf("%s:%d: ", $filename, $line);
+        }
     }
+
     return $header;
 }
 
@@ -166,7 +180,7 @@ sub rotation {
     }
 
     my $time = time;
-    my @to_unlink = grep { $time - [stat($_)]->[9] > $self->maxage } 
+    my @to_unlink = grep { $time - [stat($_)]->[9] > $self->maxage }
         glob($self->logfile_pattern);
     if ( ! @to_unlink ) {
         unlink $lock;
@@ -191,7 +205,7 @@ sub logfile_pattern {
 }
 
 sub unlink_background {
-    my ($self, @files) = @_;    
+    my ($self, @files) = @_;
     my $daemon = Proc::Daemon->new();
     @files = map { File::Spec->rel2abs($_) } @files;
     if ( ! $daemon->Init ) {
@@ -215,14 +229,14 @@ File::RotateLogs - File logger supports log rotation
 
   use File::RotateLogs;
   use Plack::Builder;
-  
+
   my $rotatelogs = File::RotateLogs->new(
       logfile => '/path/to/access_log.%Y%m%d%H%M',
       linkname => '/path/to/access_log',
       rotationtime => 3600,
       maxage => 86400, #1day
   );
-  
+
   builder {
       enable 'AccessLog',
         logger => sub { $rotatelogs->print(@_) };
@@ -252,14 +266,14 @@ default: 86400 (1day)
 
 =item maxage
 
-Maximum age of files (based on mtime), in seconds. After the age is surpassed, 
+Maximum age of files (based on mtime), in seconds. After the age is surpassed,
 files older than this age will be deleted. Optional. Default is undefined, which means unlimited.
 old files are removed at a background unlink worker.
 
 =item sleep_before_remove
 
 Sleep seconds before remove old log files. default: 3
-If sleep_before_remove == 0, files are removed within plack processes. Does not fork background 
+If sleep_before_remove == 0, files are removed within plack processes. Does not fork background
 unlink worker.
 
 =item offset
