@@ -11,7 +11,7 @@ use Mouse::Util::TypeConstraints;
 use Time::HiRes qw/ gettimeofday /;
 use File::Basename;
 
-our $VERSION = '0.070002';
+our $VERSION = '0.070003';
 
 our @ISA = qw(Exporter);
 
@@ -24,6 +24,8 @@ use constant {
     Llongfile       => 1 << 3, # full file name and line number: /a/b/c/d.pl:23
     Lshortfile      => 1 << 4, # final file name element and line number: d.pl:23. overrides Llongfile
 };
+
+my $callerLevel = 1;
 
 subtype 'File::RotateLogs::Path'
     => as 'Str'
@@ -103,7 +105,7 @@ sub _header {
     $header .= " " if ($header);
 
     if ((Llongfile | Lshortfile) & $self->flags) {
-        my ($package, $filename, $line, $subroutine, $hasargs, $wantarray, $evaltext, $is_require, $hints, $bitmask, $hinthash) = caller(2);
+        my ($package, $filename, $line, $subroutine, $hasargs, $wantarray, $evaltext, $is_require, $hints, $bitmask, $hinthash) = caller($callerLevel);
         if (Llongfile & $self->flags) {
             $header .= sprintf("%s:%d: ", $filename, $line);
         } else {
@@ -124,11 +126,15 @@ sub _gen_filename {
 
 sub println {
     my ($self,$log) = @_;
+    $log ||= '';
+    $callerLevel = 2;
     $self->print($log . "\n");
+    $callerLevel = 1;
 }
 
 sub print {
     my ($self,$log) = @_;
+    $log ||= '';
     my $fname = $self->_gen_filename;
 
     my $fh;
